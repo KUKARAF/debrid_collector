@@ -3,7 +3,7 @@ mod downloader;
 mod groq;
 mod kv;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
@@ -40,6 +40,23 @@ enum Cmd {
         /// Path to the directory containing download.sh
         dir: PathBuf,
     },
+
+    /// Manage torrents added on Real-Debrid
+    Torrent {
+        #[command(subcommand)]
+        action: TorrentCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum TorrentCmd {
+    /// List all completed (100%) torrents
+    Show,
+    /// Unrestrict torrent links and push to downloads
+    Download {
+        /// Glob pattern to match filenames, e.g. "02 - Else*"
+        pattern: Option<String>,
+    },
 }
 
 #[tokio::main]
@@ -61,9 +78,97 @@ async fn run() -> Result<()> {
             let script = dir.join("download.sh");
             downloader::run_script(&script)?;
         }
+        Cmd::Torrent { action } => {
+            torrent_cmd(action).await?;
+        }
     }
 
     Ok(())
+}
+
+fn matches_glob(name: &str, pattern: &str) -> bool {
+    let name = name.to_lowercase();
+    let pattern = pattern.to_lowercase();
+    let parts: Vec<&str> = pattern.split('*').collect();
+    if parts.len() == 1 {
+        return name.contains(parts[0]);
+    }
+    let mut rest = name.as_str();
+    for (i, part) in parts.iter().enumerate() {
+        if part.is_empty() { continue; }
+        if i == 0 {
+            if !rest.starts_with(part) { return false; }
+            rest = &rest[part.len()..];
+        } else {
+            match rest.find(part) {
+                Some(pos) => rest = &rest[pos + part.len()..],
+                None => return false,
+            }
+        }
+    }
+    if !pattern.ends_with('*') && !rest.is_empty() { return false; }
+    true
+}
+
+async fn torrent_cmd(action: TorrentCmd) -> Result<()> {
+    let token = kv::get_secret("REAL_DEBRID_API_TOKEN")
+        .context("could not obtain REAL_DEBRID_API_TOKEN")?;
+    let torrents = debrid::list_torrents(&token).await?;
+
+    let total = torrents.len();
+    let complete: Vec<_> = torrents.into_iter().filter(|t| t.progress >= 100.0).collect();
+    let skipped = total - complete.len();
+
+    match action {
+        TorrentCmd::Show => {
+            println!("{:<20} {:<50} {:<10} {}", "ID", "FILENAME", "SIZE", "ADDED");
+            println!("{}", "-".repeat(95));
+            for t in &complete {
+                let size = format_bytes(t.bytes);
+                let added = t.added.get(..10).unwrap_or(&t.added);
+                println!("{:<20} {:<50} {:<10} {}", t.id, truncate(&t.filename, 50), size, added);
+            }
+            if skipped > 0 {
+                eprintln!("({skipped} incomplete torrent(s) not shown)");
+            }
+        }
+        TorrentCmd::Download { pattern } => {
+            let selected: Vec<_> = match pattern {
+                Some(ref p) => complete.into_iter().filter(|t| matches_glob(&t.filename, p)).collect(),
+                None => complete,
+            };
+            if selected.is_empty() {
+                bail!("no matching completed torrents found");
+            }
+            for torrent in selected {
+                let info = debrid::torrent_info(&token, &torrent.id).await?;
+                for link in info.links {
+                    let result = debrid::unrestrict_link(&token, &link).await?;
+                    println!("{}", result.download);
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn format_bytes(bytes: i64) -> String {
+    if bytes >= 1_073_741_824 {
+        format!("{:.1} GB", bytes as f64 / 1_073_741_824.0)
+    } else if bytes >= 1_048_576 {
+        format!("{:.0} MB", bytes as f64 / 1_048_576.0)
+    } else {
+        format!("{:.0} KB", bytes as f64 / 1_024.0)
+    }
+}
+
+fn truncate(s: &str, max: usize) -> String {
+    if s.len() <= max {
+        s.to_string()
+    } else {
+        format!("{}…", &s[..max - 1])
+    }
 }
 
 async fn generate(output_dir: &PathBuf, run: bool, dry_run: bool) -> Result<()> {
