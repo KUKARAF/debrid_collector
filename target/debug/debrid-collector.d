@@ -1,1 +1,0 @@
-/var/home/rafa/dev/debrid_collector/target/debug/debrid-collector: /var/home/rafa/dev/debrid_collector/build.rs /var/home/rafa/dev/debrid_collector/src/debrid.rs /var/home/rafa/dev/debrid_collector/src/downloader.rs /var/home/rafa/dev/debrid_collector/src/groq.rs /var/home/rafa/dev/debrid_collector/src/kv.rs /var/home/rafa/dev/debrid_collector/src/main.rs
