@@ -1,0 +1,36 @@
+#!/usr/bin/env /mnt/raid/TvShows/.venv/bin/python
+import os
+import sys
+import requests
+
+def main():
+    token = os.getenv("REAL_DEBRID_API_TOKEN")
+    if not token:
+        print("Error: REAL_DEBRID_API_TOKEN environment variable not set", file=sys.stderr)
+        sys.exit(1)
+    
+    headers = {"Authorization": f"Bearer {token}"}
+    base_url = "https://api.real-debrid.com/rest/1.0/downloads"
+    
+    # Make API request
+    response = requests.get(
+        base_url,
+        headers=headers,
+        params={"page": 1, "limit": 100}
+    )
+    
+    # Simply output the raw response text
+    print(response.text)
+    
+    # Print CONVENTIONS.md content
+    try:
+        with open("CONVENTIONS.md", "r") as f:
+            print("\n" + f.read())
+    except FileNotFoundError:
+        print("\nCONVENTIONS.md not found", file=sys.stderr)
+    
+    # Print the prompt
+    print("\nplease create download.sh files for each season folder (skip if already present)")
+
+if __name__ == "__main__":
+    main()

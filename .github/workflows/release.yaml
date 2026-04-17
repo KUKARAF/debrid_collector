@@ -1,0 +1,105 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            cross: false
+            archive: debrid-collector-linux-amd64.tar.gz
+
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            cross: true
+            archive: debrid-collector-linux-arm64.tar.gz
+
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            cross: false
+            archive: debrid-collector-macos-amd64.tar.gz
+
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            cross: false
+            archive: debrid-collector-macos-arm64.tar.gz
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute version
+        id: version
+        shell: bash
+        run: |
+          BASE=$(cat VERSION | tr -d '[:space:]')
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          echo "tag=$BASE.$SHORT_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross
+        if: matrix.cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
+
+      - name: Build (native)
+        if: "!matrix.cross"
+        run: cargo build --release --target ${{ matrix.target }}
+        env:
+          VERSION: ${{ steps.version.outputs.tag }}
+          CARGO_INCREMENTAL: "0"
+
+      - name: Build (cross)
+        if: matrix.cross
+        run: cross build --release --target ${{ matrix.target }}
+        env:
+          VERSION: ${{ steps.version.outputs.tag }}
+          CARGO_INCREMENTAL: "0"
+
+      - name: Package
+        run: |
+          bin=target/${{ matrix.target }}/release/debrid-collector
+          tar czf ${{ matrix.archive }} -C $(dirname $bin) $(basename $bin)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.archive }}
+          path: ${{ matrix.archive }}
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute version
+        id: version
+        run: |
+          BASE=$(cat VERSION | tr -d '[:space:]')
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          echo "tag=$BASE.$SHORT_SHA" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+          path: artifacts
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: ${{ steps.version.outputs.tag }}
+          files: artifacts/*
+          prerelease: false
