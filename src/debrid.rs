@@ -102,6 +102,24 @@ pub async fn torrent_info(token: &str, id: &str) -> Result<TorrentInfo> {
     Ok(info)
 }
 
+pub async fn delete_torrent(token: &str, id: &str) -> Result<()> {
+    let client = reqwest::Client::new();
+    let resp = client
+        .delete(format!("{DEBRID_BASE}/torrents/delete/{id}"))
+        .bearer_auth(token)
+        .send()
+        .await
+        .context("real-debrid API request failed")?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        anyhow::bail!("real-debrid API returned {status}: {body}");
+    }
+
+    Ok(())
+}
+
 pub async fn unrestrict_link(token: &str, link: &str) -> Result<UnrestrictedLink> {
     let client = reqwest::Client::new();
     let resp = client

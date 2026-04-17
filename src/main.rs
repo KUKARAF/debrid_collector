@@ -57,6 +57,11 @@ enum TorrentCmd {
         /// Glob pattern to match filenames, e.g. "02 - Else*"
         pattern: Option<String>,
     },
+    /// Delete torrents from Real-Debrid
+    Delete {
+        /// Glob pattern to match filenames, e.g. "02 - Else*"
+        pattern: Option<String>,
+    },
 }
 
 #[tokio::main]
@@ -146,6 +151,19 @@ async fn torrent_cmd(action: TorrentCmd) -> Result<()> {
                     let result = debrid::unrestrict_link(&token, &link).await?;
                     println!("{}", result.download);
                 }
+            }
+        }
+        TorrentCmd::Delete { pattern } => {
+            let selected: Vec<_> = match pattern {
+                Some(ref p) => complete.into_iter().filter(|t| matches_glob(&t.filename, p)).collect(),
+                None => complete,
+            };
+            if selected.is_empty() {
+                bail!("no matching completed torrents found");
+            }
+            for torrent in &selected {
+                debrid::delete_torrent(&token, &torrent.id).await?;
+                println!("deleted {}", torrent.filename);
             }
         }
     }
