@@ -45,6 +45,9 @@ enum Cmd {
         dir: PathBuf,
     },
 
+    /// List available Groq models
+    Models,
+
     /// Manage torrents added on Real-Debrid
     Torrent {
         #[command(subcommand)]
@@ -82,6 +85,15 @@ async fn run() -> Result<()> {
     match cli.command {
         Cmd::Generate { output_dir, run, dry_run, model } => {
             generate(&output_dir, run, dry_run, model.as_deref()).await?;
+        }
+        Cmd::Models => {
+            let api_key = kv::get_secret("MEDIA_GROQ_API_KEY")
+                .context("could not obtain MEDIA_GROQ_API_KEY")?;
+            let models = groq::list_models(&api_key).await?;
+            if let Some(selected) = select_model(&models)? {
+                save_model_to_conventions(selected)?;
+                println!("Saved '{selected}' to CONVENTIONS.md");
+            }
         }
         Cmd::Run { dir } => {
             let script = dir.join("download.sh");
@@ -193,8 +205,81 @@ fn truncate(s: &str, max: usize) -> String {
     }
 }
 
+/// Parse optional YAML frontmatter from a markdown string.
+/// Returns (frontmatter_model, body_without_frontmatter).
+fn parse_frontmatter(src: &str) -> (Option<String>, &str) {
+    let Some(rest) = src.strip_prefix("---\n") else {
+        return (None, src);
+    };
+    let Some(end) = rest.find("\n---\n") else {
+        return (None, src);
+    };
+    let front = &rest[..end];
+    let body = &rest[end + 5..]; // skip "\n---\n"
+    let model = front.lines().find_map(|line| {
+        let line = line.trim();
+        let val = line.strip_prefix("model:")?;
+        Some(val.trim().to_string())
+    });
+    (model, body)
+}
+
+fn save_model_to_conventions(model: &str) -> Result<()> {
+    let path = std::path::Path::new("CONVENTIONS.md");
+    let existing = std::fs::read_to_string(path).unwrap_or_default();
+    let (_, body) = parse_frontmatter(&existing);
+    let new_content = format!("---\nmodel: {model}\n---\n{body}");
+    std::fs::write(path, new_content).context("failed to write CONVENTIONS.md")?;
+    Ok(())
+}
+
+/// Try to select a model interactively via fzf, falling back to numbered list.
+fn select_model(models: &[String]) -> Result<Option<&str>> {
+    // Try fzf first
+    if std::process::Command::new("fzf").arg("--version").output().is_ok() {
+        use std::io::Write as _;
+        use std::process::{Command, Stdio};
+        let mut child = Command::new("fzf")
+            .arg("--prompt=Select model: ")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .context("failed to spawn fzf")?;
+        {
+            let stdin = child.stdin.as_mut().unwrap();
+            stdin.write_all(models.join("\n").as_bytes())?;
+        }
+        let output = child.wait_with_output()?;
+        if output.status.success() {
+            let selected = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            return Ok(models.iter().find(|m| m.as_str() == selected).map(|s| s.as_str()));
+        }
+        return Ok(None); // user cancelled fzf
+    }
+
+    // Fallback: numbered list
+    for (i, m) in models.iter().enumerate() {
+        println!("{:3}. {}", i + 1, m);
+    }
+    print!("\nEnter number to save model to CONVENTIONS.md (Enter to skip): ");
+    use std::io::Write as _;
+    std::io::stdout().flush()?;
+    let mut input = String::new();
+    std::io::stdin().read_line(&mut input)?;
+    let input = input.trim();
+    if input.is_empty() {
+        return Ok(None);
+    }
+    match input.parse::<usize>() {
+        Ok(n) if n >= 1 && n <= models.len() => Ok(Some(&models[n - 1])),
+        _ => {
+            eprintln!("Invalid selection.");
+            Ok(None)
+        }
+    }
+}
+
 async fn generate(output_dir: &PathBuf, run: bool, dry_run: bool, model: Option<&str>) -> Result<()> {
-    let model = model.unwrap_or(groq::DEFAULT_MODEL);
     // ── secrets ──────────────────────────────────────────────────────────────
     eprintln!("[1/4] Loading secrets...");
     let groq_api_key = kv::get_secret("MEDIA_GROQ_API_KEY")
@@ -203,8 +288,14 @@ async fn generate(output_dir: &PathBuf, run: bool, dry_run: bool, model: Option<
         .context("could not obtain REAL_DEBRID_API_TOKEN")?;
 
     // ── conventions ──────────────────────────────────────────────────────────
-    let conventions = std::fs::read_to_string("CONVENTIONS.md")
+    let conventions_raw = std::fs::read_to_string("CONVENTIONS.md")
         .context("failed to read CONVENTIONS.md (run from the debrid_collector directory)")?;
+    let (frontmatter_model, conventions) = parse_frontmatter(&conventions_raw);
+
+    // Priority: -m flag > CONVENTIONS.md frontmatter > default
+    let model = model
+        .or(frontmatter_model.as_deref())
+        .unwrap_or(groq::DEFAULT_MODEL);
 
     // ── real-debrid downloads ─────────────────────────────────────────────────
     eprintln!("[2/4] Fetching downloads from real-debrid...");

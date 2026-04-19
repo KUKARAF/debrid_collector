@@ -39,6 +39,36 @@ struct AssistantMessage {
     content: String,
 }
 
+pub async fn list_models(api_key: &str) -> Result<Vec<String>> {
+    #[derive(Deserialize)]
+    struct Model {
+        id: String,
+    }
+    #[derive(Deserialize)]
+    struct ModelsResponse {
+        data: Vec<Model>,
+    }
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(format!("{GROQ_BASE_URL}/models"))
+        .bearer_auth(api_key)
+        .send()
+        .await
+        .context("Groq API request failed")?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        anyhow::bail!("Groq API returned {status}: {text}");
+    }
+
+    let parsed: ModelsResponse = resp.json().await.context("failed to parse models response")?;
+    let mut ids: Vec<String> = parsed.data.into_iter().map(|m| m.id).collect();
+    ids.sort();
+    Ok(ids)
+}
+
 pub async fn chat(api_key: &str, model: &str, messages: &[Message]) -> Result<String> {
     let client = reqwest::Client::new();
     let body = ChatRequest {
