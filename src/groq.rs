@@ -2,7 +2,8 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 const GROQ_BASE_URL: &str = "https://api.groq.com/openai/v1";
-pub const MODEL: &str = "moonshotai/kimi-k2";
+pub const DEFAULT_MODEL: &str = "qwen/qwen3-32b";
+pub const FALLBACK_MODELS: &[&str] = &["openai/gpt-oss-120b", "llama-3.3-70b-versatile"];
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Message {
@@ -38,10 +39,10 @@ struct AssistantMessage {
     content: String,
 }
 
-pub async fn chat(api_key: &str, messages: &[Message]) -> Result<String> {
+pub async fn chat(api_key: &str, model: &str, messages: &[Message]) -> Result<String> {
     let client = reqwest::Client::new();
     let body = ChatRequest {
-        model: MODEL,
+        model,
         messages,
         response_format: ResponseFormat { kind: "json_object" },
     };
@@ -69,4 +70,34 @@ pub async fn chat(api_key: &str, messages: &[Message]) -> Result<String> {
         .unwrap_or_default();
 
     Ok(content)
+}
+
+/// Try `model` first, then each fallback in order if the model is not found.
+pub async fn chat_with_fallback(
+    api_key: &str,
+    model: &str,
+    messages: &[Message],
+) -> Result<String> {
+    let candidates = std::iter::once(model).chain(FALLBACK_MODELS.iter().copied());
+    let mut last_err = anyhow::anyhow!("no models to try");
+    for candidate in candidates {
+        match chat(api_key, candidate, messages).await {
+            Ok(resp) => {
+                if candidate != model {
+                    eprintln!("      (used fallback model: {candidate})");
+                }
+                return Ok(resp);
+            }
+            Err(e) => {
+                let msg = e.to_string();
+                if msg.contains("model_not_found") || msg.contains("does not exist") {
+                    eprintln!("      model {candidate} not available, trying next...");
+                    last_err = e;
+                } else {
+                    return Err(e);
+                }
+            }
+        }
+    }
+    Err(last_err)
 }

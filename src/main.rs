@@ -10,7 +10,7 @@ use std::path::PathBuf;
 #[derive(Parser)]
 #[command(
     name = "debrid-collector",
-    about = "Generate and run download.sh scripts from real-debrid, powered by Kimi K2",
+    about = "Generate and run download.sh scripts from real-debrid, powered by AI",
     version = env!("APP_VERSION")
 )]
 struct Cli {
@@ -33,6 +33,10 @@ enum Cmd {
         /// Print what would be written without creating any files
         #[arg(long)]
         dry_run: bool,
+
+        /// Override the AI model (default: qwen/qwen3-32b)
+        #[arg(short, long)]
+        model: Option<String>,
     },
 
     /// Run an existing download.sh inside a season directory
@@ -76,8 +80,8 @@ async fn run() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Cmd::Generate { output_dir, run, dry_run } => {
-            generate(&output_dir, run, dry_run).await?;
+        Cmd::Generate { output_dir, run, dry_run, model } => {
+            generate(&output_dir, run, dry_run, model.as_deref()).await?;
         }
         Cmd::Run { dir } => {
             let script = dir.join("download.sh");
@@ -189,7 +193,8 @@ fn truncate(s: &str, max: usize) -> String {
     }
 }
 
-async fn generate(output_dir: &PathBuf, run: bool, dry_run: bool) -> Result<()> {
+async fn generate(output_dir: &PathBuf, run: bool, dry_run: bool, model: Option<&str>) -> Result<()> {
+    let model = model.unwrap_or(groq::DEFAULT_MODEL);
     // ── secrets ──────────────────────────────────────────────────────────────
     eprintln!("[1/4] Loading secrets...");
     let groq_api_key = kv::get_secret("MEDIA_GROQ_API_KEY")
@@ -212,7 +217,7 @@ async fn generate(output_dir: &PathBuf, run: bool, dry_run: bool) -> Result<()> 
     }
 
     // ── AI call ───────────────────────────────────────────────────────────────
-    eprintln!("[3/4] Asking {} to create download.sh files...", groq::MODEL);
+    eprintln!("[3/4] Asking {} to create download.sh files...", model);
     let downloads_json = serde_json::to_string_pretty(&downloads)?;
 
     let system_msg = format!(
@@ -244,7 +249,7 @@ async fn generate(output_dir: &PathBuf, run: bool, dry_run: bool) -> Result<()> 
         groq::Message { role: "user".to_string(), content: user_msg },
     ];
 
-    let response = groq::chat(&groq_api_key, &messages).await?;
+    let response = groq::chat_with_fallback(&groq_api_key, model, &messages).await?;
 
     // ── parse response ────────────────────────────────────────────────────────
     #[derive(serde::Deserialize)]
