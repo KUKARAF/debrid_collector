@@ -69,11 +69,37 @@ pub async fn list_models(api_key: &str) -> Result<Vec<String>> {
     Ok(ids)
 }
 
+/// Qwen3 models emit reasoning tokens that break json_object mode unless thinking is disabled.
+fn is_qwen3(model: &str) -> bool {
+    model.to_lowercase().contains("qwen3")
+}
+
 pub async fn chat(api_key: &str, model: &str, messages: &[Message]) -> Result<String> {
     let client = reqwest::Client::new();
+
+    // For qwen3 models, append /no-think to the last user message to disable
+    // chain-of-thought output, which otherwise causes json_validate_failed errors.
+    let patched: Vec<Message>;
+    let effective_messages: &[Message] = if is_qwen3(model) {
+        patched = messages
+            .iter()
+            .cloned()
+            .enumerate()
+            .map(|(i, mut m)| {
+                if i == messages.len() - 1 && m.role == "user" {
+                    m.content.push_str(" /no-think");
+                }
+                m
+            })
+            .collect();
+        &patched
+    } else {
+        messages
+    };
+
     let body = ChatRequest {
         model,
-        messages,
+        messages: effective_messages,
         response_format: ResponseFormat { kind: "json_object" },
     };
 
@@ -120,8 +146,11 @@ pub async fn chat_with_fallback(
             }
             Err(e) => {
                 let msg = e.to_string();
-                if msg.contains("model_not_found") || msg.contains("does not exist") {
-                    eprintln!("      model {candidate} not available, trying next...");
+                if msg.contains("model_not_found")
+                    || msg.contains("does not exist")
+                    || msg.contains("json_validate_failed")
+                {
+                    eprintln!("      model {candidate} failed, trying next...");
                     last_err = e;
                 } else {
                     return Err(e);
