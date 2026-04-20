@@ -346,7 +346,7 @@ async fn generate(output_dir: &PathBuf, run: bool, dry_run: bool, model: Option<
         eprintln!("      (empty — first run)");
     } else {
         let count = existing_structure.lines().filter(|l| !l.starts_with(' ')).count();
-        eprintln!("      {} show(s) found", count);
+        eprintln!("      {} top-level folder(s) found", count);
     }
 
     // ── real-debrid downloads ─────────────────────────────────────────────────
