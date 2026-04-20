@@ -1,6 +1,6 @@
+mod ai;
 mod debrid;
 mod downloader;
-mod groq;
 mod kv;
 
 use anyhow::{Context, Result, bail};
@@ -87,9 +87,9 @@ async fn run() -> Result<()> {
             generate(&output_dir, run, dry_run, model.as_deref()).await?;
         }
         Cmd::Models => {
-            let api_key = kv::get_secret("MEDIA_GROQ_API_KEY")
-                .context("could not obtain MEDIA_GROQ_API_KEY")?;
-            let models = groq::list_models(&api_key).await?;
+            let api_key = kv::get_secret("OPENROUTER_API_KEY")
+                .context("could not obtain OPENROUTER_API_KEY")?;
+            let models = ai::list_models(&api_key).await?;
             if let Some(selected) = select_model(&models)? {
                 save_model_to_conventions(selected)?;
                 println!("Saved '{selected}' to CONVENTIONS.md");
@@ -325,8 +325,8 @@ fn scan_output_dir(output_dir: &std::path::Path) -> Result<String> {
 async fn generate(output_dir: &PathBuf, run: bool, dry_run: bool, model: Option<&str>) -> Result<()> {
     // ── secrets ──────────────────────────────────────────────────────────────
     eprintln!("[1/5] Loading secrets...");
-    let groq_api_key = kv::get_secret("MEDIA_GROQ_API_KEY")
-        .context("could not obtain MEDIA_GROQ_API_KEY")?;
+    let openrouter_api_key = kv::get_secret("OPENROUTER_API_KEY")
+        .context("could not obtain OPENROUTER_API_KEY")?;
     let debrid_token = kv::get_secret("REAL_DEBRID_API_TOKEN")
         .context("could not obtain REAL_DEBRID_API_TOKEN")?;
 
@@ -337,7 +337,7 @@ async fn generate(output_dir: &PathBuf, run: bool, dry_run: bool, model: Option<
     // Priority: -m flag > CONVENTIONS.md frontmatter > default
     let model = model
         .or(frontmatter_model.as_deref())
-        .unwrap_or(groq::DEFAULT_MODEL);
+        .unwrap_or(ai::DEFAULT_MODEL);
 
     // ── scan existing structure ───────────────────────────────────────────────
     eprintln!("[2/5] Scanning existing structure in {}...", output_dir.display());
@@ -400,11 +400,11 @@ async fn generate(output_dir: &PathBuf, run: bool, dry_run: bool, model: Option<
     );
 
     let messages = vec![
-        groq::Message { role: "system".to_string(), content: system_msg },
-        groq::Message { role: "user".to_string(), content: user_msg },
+        ai::Message { role: "system".to_string(), content: system_msg },
+        ai::Message { role: "user".to_string(), content: user_msg },
     ];
 
-    let response = groq::chat_with_fallback(&groq_api_key, model, &messages).await?;
+    let response = ai::chat_with_fallback(&openrouter_api_key, model, &messages).await?;
 
     // ── parse response ────────────────────────────────────────────────────────
     #[derive(serde::Deserialize)]
