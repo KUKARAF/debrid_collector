@@ -18,22 +18,31 @@ pub struct Download {
 
 pub async fn list_downloads(token: &str) -> Result<Vec<Download>> {
     let client = reqwest::Client::new();
-    let resp = client
-        .get(format!("{DEBRID_BASE}/downloads"))
-        .bearer_auth(token)
-        .query(&[("page", "1"), ("limit", "100")])
-        .send()
-        .await
-        .context("real-debrid API request failed")?;
+    let mut all: Vec<Download> = Vec::new();
+    let mut page = 1u32;
+    const LIMIT: usize = 100;
+    loop {
+        let resp = client
+            .get(format!("{DEBRID_BASE}/downloads"))
+            .bearer_auth(token)
+            .query(&[("page", page.to_string().as_str()), ("limit", "100")])
+            .send()
+            .await
+            .context("real-debrid API request failed")?;
 
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        anyhow::bail!("real-debrid API returned {status}: {body}");
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            anyhow::bail!("real-debrid API returned {status}: {body}");
+        }
+
+        let page_items: Vec<Download> = resp.json().await.context("failed to parse downloads")?;
+        let done = page_items.len() < LIMIT;
+        all.extend(page_items);
+        if done { break; }
+        page += 1;
     }
-
-    let downloads: Vec<Download> = resp.json().await.context("failed to parse downloads")?;
-    Ok(downloads)
+    Ok(all)
 }
 
 #[derive(Deserialize, Debug)]
@@ -65,22 +74,31 @@ pub struct UnrestrictedLink {
 
 pub async fn list_torrents(token: &str) -> Result<Vec<Torrent>> {
     let client = reqwest::Client::new();
-    let resp = client
-        .get(format!("{DEBRID_BASE}/torrents"))
-        .bearer_auth(token)
-        .query(&[("page", "1"), ("limit", "100")])
-        .send()
-        .await
-        .context("real-debrid API request failed")?;
+    let mut all: Vec<Torrent> = Vec::new();
+    let mut page = 1u32;
+    const LIMIT: usize = 100;
+    loop {
+        let resp = client
+            .get(format!("{DEBRID_BASE}/torrents"))
+            .bearer_auth(token)
+            .query(&[("page", page.to_string().as_str()), ("limit", "100")])
+            .send()
+            .await
+            .context("real-debrid API request failed")?;
 
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        anyhow::bail!("real-debrid API returned {status}: {body}");
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            anyhow::bail!("real-debrid API returned {status}: {body}");
+        }
+
+        let page_items: Vec<Torrent> = resp.json().await.context("failed to parse torrents")?;
+        let done = page_items.len() < LIMIT;
+        all.extend(page_items);
+        if done { break; }
+        page += 1;
     }
-
-    let torrents: Vec<Torrent> = resp.json().await.context("failed to parse torrents")?;
-    Ok(torrents)
+    Ok(all)
 }
 
 pub async fn torrent_info(token: &str, id: &str) -> Result<TorrentInfo> {
