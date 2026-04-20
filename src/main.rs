@@ -279,17 +279,59 @@ fn select_model(models: &[String]) -> Result<Option<&str>> {
     }
 }
 
+fn load_conventions(output_dir: &std::path::Path) -> Result<String> {
+    let in_output_dir = output_dir.join("CONVENTIONS.md");
+    if in_output_dir.exists() {
+        return std::fs::read_to_string(&in_output_dir)
+            .with_context(|| format!("failed to read {}", in_output_dir.display()));
+    }
+    let in_cwd = std::path::Path::new("CONVENTIONS.md");
+    if in_cwd.exists() {
+        return std::fs::read_to_string(in_cwd)
+            .context("failed to read ./CONVENTIONS.md");
+    }
+    bail!(
+        "CONVENTIONS.md not found in {} or the current directory",
+        output_dir.display()
+    )
+}
+
+fn scan_output_dir(output_dir: &std::path::Path) -> Result<String> {
+    if !output_dir.exists() {
+        return Ok(String::new());
+    }
+    let mut lines: Vec<String> = Vec::new();
+    let mut shows: Vec<_> = std::fs::read_dir(output_dir)
+        .with_context(|| format!("failed to read {}", output_dir.display()))?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().is_dir())
+        .collect();
+    shows.sort_by_key(|e| e.file_name());
+    for show in shows {
+        lines.push(format!("{}/", show.file_name().to_string_lossy()));
+        let mut seasons: Vec<_> = std::fs::read_dir(show.path())
+            .unwrap_or_else(|_| panic!())
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().is_dir())
+            .collect();
+        seasons.sort_by_key(|e| e.file_name());
+        for season in seasons {
+            lines.push(format!("  {}/", season.file_name().to_string_lossy()));
+        }
+    }
+    Ok(lines.join("\n"))
+}
+
 async fn generate(output_dir: &PathBuf, run: bool, dry_run: bool, model: Option<&str>) -> Result<()> {
     // ── secrets ──────────────────────────────────────────────────────────────
-    eprintln!("[1/4] Loading secrets...");
+    eprintln!("[1/5] Loading secrets...");
     let groq_api_key = kv::get_secret("MEDIA_GROQ_API_KEY")
         .context("could not obtain MEDIA_GROQ_API_KEY")?;
     let debrid_token = kv::get_secret("REAL_DEBRID_API_TOKEN")
         .context("could not obtain REAL_DEBRID_API_TOKEN")?;
 
     // ── conventions ──────────────────────────────────────────────────────────
-    let conventions_raw = std::fs::read_to_string("CONVENTIONS.md")
-        .context("failed to read CONVENTIONS.md (run from the debrid_collector directory)")?;
+    let conventions_raw = load_conventions(output_dir)?;
     let (frontmatter_model, conventions) = parse_frontmatter(&conventions_raw);
 
     // Priority: -m flag > CONVENTIONS.md frontmatter > default
@@ -297,8 +339,18 @@ async fn generate(output_dir: &PathBuf, run: bool, dry_run: bool, model: Option<
         .or(frontmatter_model.as_deref())
         .unwrap_or(groq::DEFAULT_MODEL);
 
+    // ── scan existing structure ───────────────────────────────────────────────
+    eprintln!("[2/5] Scanning existing structure in {}...", output_dir.display());
+    let existing_structure = scan_output_dir(output_dir)?;
+    if existing_structure.is_empty() {
+        eprintln!("      (empty — first run)");
+    } else {
+        let count = existing_structure.lines().filter(|l| !l.starts_with(' ')).count();
+        eprintln!("      {} show(s) found", count);
+    }
+
     // ── real-debrid downloads ─────────────────────────────────────────────────
-    eprintln!("[2/4] Fetching downloads from real-debrid...");
+    eprintln!("[3/5] Fetching downloads from real-debrid...");
     let downloads = debrid::list_downloads(&debrid_token).await?;
     eprintln!("      {} downloads found", downloads.len());
 
@@ -308,26 +360,38 @@ async fn generate(output_dir: &PathBuf, run: bool, dry_run: bool, model: Option<
     }
 
     // ── AI call ───────────────────────────────────────────────────────────────
-    eprintln!("[3/4] Asking {} to create download.sh files...", model);
+    eprintln!("[4/5] Asking {} to create download.sh files...", model);
     let downloads_json = serde_json::to_string_pretty(&downloads)?;
+
+    let existing_block = if existing_structure.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "EXISTING STRUCTURE (already on disk — do NOT re-download these):\n\
+             {existing_structure}\n\n"
+        )
+    };
 
     let system_msg = format!(
         "You are a media file organizer. \
          Given a list of real-debrid downloads and naming conventions, \
-         you group the files into the correct show/season folder structure \
+         you group the files into the correct folder structure \
          and emit the wget commands for each download.sh script.\n\n\
-         CONVENTIONS:\n{conventions}\n\n\
+         CONVENTIONS (follow these exactly — they define folder structure, naming, and which media types to include):\n\
+         {conventions}\n\n\
+         {existing_block}\
          Respond with ONLY a JSON object matching this exact schema (no markdown):\n\
-         {{\"scripts\":[{{\"path\":\"Show Title [imdbid-ttXXXXXXX]/S01\",\
-         \"content\":\"wget -O \\\"S01E01 - Title.mkv\\\" \\\"https://...\\\"\\n\"}}]}}\n\n\
+         {{\"scripts\":[{{\"path\":\"path/to/subfolder\",\
+         \"content\":\"wget -O \\\"filename.ext\\\" \\\"https://...\\\"\\n\"}}]}}\n\n\
          Rules:\n\
-         - path is relative to the output directory\n\
+         - path is relative to the output directory; derive the structure from CONVENTIONS\n\
          - Use the 'download' field from each entry as the wget URL\n\
-         - Output filename must follow the conventions (include season+episode, original title language)\n\
+         - Output filename must follow the naming rules in CONVENTIONS\n\
          - One wget -O line per file; use double-quotes around filename and URL\n\
-         - Group episodes from the same show+season into the same script\n\
-         - Omit entries that are not TV show episodes (movies, samples, etc.)\n\
-         - If you cannot determine the show/season from the filename, use best judgement"
+         - Group files that belong in the same folder into the same script\n\
+         - If you cannot determine where a file belongs from the filename, use best judgement\n\
+         - If a folder already exists in EXISTING STRUCTURE, use the EXACT folder name shown above\n\
+         - If a subfolder already exists in EXISTING STRUCTURE, skip all files for that subfolder (assume they are already downloaded)"
     );
 
     let user_msg = format!(
@@ -354,7 +418,7 @@ async fn generate(output_dir: &PathBuf, run: bool, dry_run: bool, model: Option<
     eprintln!("      AI proposed {} script(s)", ai.scripts.len());
 
     // ── write scripts ─────────────────────────────────────────────────────────
-    eprintln!("[4/4] Writing scripts to {}...", output_dir.display());
+    eprintln!("[5/5] Writing scripts to {}...", output_dir.display());
     let created = downloader::write_scripts(ai.scripts, output_dir, dry_run)?;
 
     if dry_run {
