@@ -361,7 +361,8 @@ async fn generate(output_dir: &PathBuf, run: bool, dry_run: bool, model: Option<
 
     // ── classify downloads ────────────────────────────────────────────────────
     eprintln!("[4/6] Classifying {} downloads with {}...", downloads.len(), ai::CLASSIFIER_MODEL);
-    let classify_futures: Vec<_> = downloads.iter().map(|d| {
+    use futures::StreamExt as _;
+    let results: Vec<_> = futures::stream::iter(downloads.iter().map(|d| {
         let key = openrouter_api_key.clone();
         let filename = d.filename.clone();
         let conv = conventions.to_string();
@@ -383,9 +384,10 @@ async fn generate(output_dir: &PathBuf, run: bool, dry_run: bool, model: Option<
             ];
             ai::chat_text(&key, ai::CLASSIFIER_MODEL, &messages).await
         }
-    }).collect();
-
-    let results = futures::future::join_all(classify_futures).await;
+    }))
+    .buffer_unordered(10)
+    .collect()
+    .await;
     let total = results.len();
     let relevant: Vec<_> = downloads.into_iter().zip(results).filter_map(|(d, res)| {
         match res {

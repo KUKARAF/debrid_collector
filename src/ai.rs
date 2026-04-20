@@ -2,8 +2,8 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 const BASE_URL: &str = "https://openrouter.ai/api/v1";
-pub const DEFAULT_MODEL: &str = "z-ai/glm-5-plus";
-pub const CLASSIFIER_MODEL: &str = "meta-llama/llama-3.1-8b-instruct:free";
+pub const DEFAULT_MODEL: &str = "z-ai/glm-5.1";
+pub const CLASSIFIER_MODEL: &str = "z-ai/glm-4.5-air";
 pub const FALLBACK_MODELS: &[&str] = &["qwen/qwen3-32b", "meta-llama/llama-3.3-70b-instruct"];
 
 #[derive(Serialize, Deserialize, Clone)]
