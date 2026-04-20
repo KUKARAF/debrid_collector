@@ -1,11 +1,11 @@
 # debrid-collector
 
-CLI tool to organize and download Real-Debrid media files. Uses Groq AI to automatically generate folder-structured download scripts for TV shows, respecting your naming conventions.
+CLI tool to organize and download Real-Debrid media files. Uses OpenRouter AI to automatically generate folder-structured download scripts for any media type (TV shows, movies, audiobooks, music, etc.), respecting your naming conventions.
 
 ## Prerequisites
 
 - **[Real-Debrid](https://real-debrid.com)** account with API token
-- **[Groq](https://console.groq.com)** API key (for AI mode)
+- **[OpenRouter](https://openrouter.ai)** API key (for AI mode)
 - `fzf` (optional, for interactive model picker)
 
 ## Setup
@@ -14,7 +14,7 @@ Set your credentials via environment variables:
 
 ```sh
 export REAL_DEBRID_API_TOKEN=your_token
-export MEDIA_GROQ_API_KEY=your_groq_key
+export OPENROUTER_API_KEY=your_openrouter_key
 ```
 
 Or store them in the `kv` secret store if you have `kv_cli` installed.
@@ -29,7 +29,7 @@ debrid-collector <COMMAND>
 
 ## AI Mode — `generate`
 
-The primary workflow. Fetches your Real-Debrid downloads and uses Groq AI to organize them into season folders and generate executable download scripts.
+The primary workflow. Fetches your Real-Debrid downloads and uses OpenRouter AI to organize them into the correct folder structure and generate executable download scripts.
 
 ```sh
 debrid-collector generate [OPTIONS]
@@ -42,7 +42,7 @@ debrid-collector generate [OPTIONS]
 | `-o, --output-dir <DIR>` | `.` | Where to write the generated folder structure |
 | `--run` | — | Execute all generated scripts immediately |
 | `--dry-run` | — | Preview what would be written without creating files |
-| `-m, --model <MODEL>` | see below | Override the Groq model |
+| `-m, --model <MODEL>` | see below | Override the AI model |
 
 **Examples:**
 
@@ -57,18 +57,19 @@ debrid-collector generate -o ~/Media
 debrid-collector generate -o ~/Media --run
 
 # Use a specific model
-debrid-collector generate -m llama-3.3-70b-versatile
+debrid-collector generate -m meta-llama/llama-3.3-70b-instruct
 ```
 
 **What it does:**
 
-1. Reads `CONVENTIONS.md` for your naming rules
-2. Fetches your current downloads from Real-Debrid
-3. Sends everything to Groq AI, which groups files into `Show/Season/` folders
-4. Writes a `download.sh` script in each season directory
-5. Optionally runs the scripts (`--run`)
+1. Reads `CONVENTIONS.md` from `--output-dir` (falls back to CWD) for your naming and structure rules
+2. Scans the output directory for existing folders to avoid re-downloading
+3. Fetches your current downloads from Real-Debrid
+4. Sends everything to the AI, which groups files per your conventions
+5. Writes a `download.sh` script in each folder
+6. Optionally runs the scripts (`--run`)
 
-**Output structure example:**
+**Output structure example (TV shows):**
 
 ```
 ~/Media/
@@ -166,7 +167,7 @@ debrid-collector torrent delete
 
 ## Model Selection — `models`
 
-Interactively pick a Groq model and save it to `CONVENTIONS.md`:
+Interactively pick an OpenRouter model and save it to `CONVENTIONS.md`:
 
 ```sh
 debrid-collector models
@@ -178,18 +179,18 @@ Uses `fzf` if available, otherwise shows a numbered list. The selected model is 
 
 1. `-m` flag (per-run override)
 2. `model:` field in `CONVENTIONS.md` frontmatter
-3. Default: `qwen/qwen3-32b`
-4. Automatic fallbacks if the model fails: `openai/gpt-oss-120b`, `llama-3.3-70b-versatile`
+3. Default: `z-ai/glm-5-plus`
+4. Automatic fallbacks if the model fails: `qwen/qwen3-32b`, `meta-llama/llama-3.3-70b-instruct`
 
 ---
 
 ## Naming Conventions (`CONVENTIONS.md`)
 
-Create a `CONVENTIONS.md` file in your working directory to guide the AI:
+Create a `CONVENTIONS.md` file in your output directory (or CWD) to guide the AI. It defines folder structure, naming rules, and which media types to include — so it works for any media type, not just TV shows.
 
 ```markdown
 ---
-model: qwen/qwen3-32b
+model: z-ai/glm-5-plus
 ---
 
 - Seasons go in their own folder: `S01`, `S02`, etc.
@@ -200,4 +201,4 @@ model: qwen/qwen3-32b
 Example: `The Rookie [imdbid-tt7587890]/S03/S03E01 - Consequences WEBRip-1080p.mkv`
 ```
 
-The AI reads this file on every `generate` run to produce consistent, correctly named output.
+The AI reads this file on every `generate` run. If `CONVENTIONS.md` exists in the output directory, it takes precedence over the one in CWD.
