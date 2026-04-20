@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 
 const BASE_URL: &str = "https://openrouter.ai/api/v1";
 pub const DEFAULT_MODEL: &str = "z-ai/glm-5-plus";
+pub const CLASSIFIER_MODEL: &str = "meta-llama/llama-3.1-8b-instruct:free";
 pub const FALLBACK_MODELS: &[&str] = &["qwen/qwen3-32b", "meta-llama/llama-3.3-70b-instruct"];
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -67,6 +68,35 @@ pub async fn list_models(api_key: &str) -> Result<Vec<String>> {
     let mut ids: Vec<String> = parsed.data.into_iter().map(|m| m.id).collect();
     ids.sort();
     Ok(ids)
+}
+
+/// Plain-text chat — no JSON response_format. Used for yes/no classification.
+pub async fn chat_text(api_key: &str, model: &str, messages: &[Message]) -> Result<String> {
+    #[derive(Serialize)]
+    struct PlainRequest<'a> {
+        model: &'a str,
+        messages: &'a [Message],
+    }
+
+    let client = reqwest::Client::new();
+    let body = PlainRequest { model, messages };
+
+    let resp = client
+        .post(format!("{BASE_URL}/chat/completions"))
+        .bearer_auth(api_key)
+        .json(&body)
+        .send()
+        .await
+        .context("OpenRouter API request failed")?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        anyhow::bail!("OpenRouter API returned {status}: {text}");
+    }
+
+    let parsed: ChatResponse = resp.json().await.context("failed to parse OpenRouter response")?;
+    Ok(parsed.choices.into_iter().next().map(|c| c.message.content).unwrap_or_default())
 }
 
 async fn chat(api_key: &str, model: &str, messages: &[Message]) -> Result<String> {

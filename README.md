@@ -6,6 +6,7 @@ CLI tool to organize and download Real-Debrid media files. Uses OpenRouter AI to
 
 - **[Real-Debrid](https://real-debrid.com)** account with API token
 - **[OpenRouter](https://openrouter.ai)** API key (for AI mode)
+- **[kv_cli](https://github.com/KUKARAF/kv_cli)** + **[kv_server](https://github.com/KUKARAF/kv_server)** (recommended secret store)
 - `fzf` (optional, for interactive model picker)
 
 ## Setup
@@ -17,7 +18,14 @@ export REAL_DEBRID_API_TOKEN=your_token
 export OPENROUTER_API_KEY=your_openrouter_key
 ```
 
-Or store them in the `kv` secret store if you have `kv_cli` installed.
+Or store them in the `kv` secret store (recommended):
+
+```sh
+kv set REAL_DEBRID_API_TOKEN your_token
+kv set OPENROUTER_API_KEY your_openrouter_key
+```
+
+See [kv_cli](https://github.com/KUKARAF/kv_cli) and [kv_server](https://github.com/KUKARAF/kv_server) for setup instructions.
 
 ## Usage
 
@@ -64,10 +72,11 @@ debrid-collector generate -m meta-llama/llama-3.3-70b-instruct
 
 1. Reads `CONVENTIONS.md` from `--output-dir` (falls back to CWD) for your naming and structure rules
 2. Scans the output directory for existing folders to avoid re-downloading
-3. Fetches your current downloads from Real-Debrid
-4. Sends everything to the AI, which groups files per your conventions
-5. Writes a `download.sh` script in each folder
-6. Optionally runs the scripts (`--run`)
+3. Fetches all your downloads from Real-Debrid (paginated)
+4. Classifies each download in parallel using a cheap model — only files that match your conventions pass through
+5. Sends the filtered list to the main model, which groups files per your conventions and generates scripts
+6. Writes a `download.sh` script in each folder
+7. Optionally runs the scripts (`--run`)
 
 **Output structure example (TV shows):**
 

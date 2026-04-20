@@ -359,9 +359,55 @@ async fn generate(output_dir: &PathBuf, run: bool, dry_run: bool, model: Option<
         return Ok(());
     }
 
+    // ── classify downloads ────────────────────────────────────────────────────
+    eprintln!("[4/6] Classifying {} downloads with {}...", downloads.len(), ai::CLASSIFIER_MODEL);
+    let classify_futures: Vec<_> = downloads.iter().map(|d| {
+        let key = openrouter_api_key.clone();
+        let filename = d.filename.clone();
+        let conv = conventions.to_string();
+        async move {
+            let messages = vec![
+                ai::Message {
+                    role: "system".to_string(),
+                    content: "You are a media file classifier. Answer only 'yes' or 'no', nothing else.".to_string(),
+                },
+                ai::Message {
+                    role: "user".to_string(),
+                    content: format!(
+                        "Given these media collection conventions:\n{conv}\n\n\
+                         Does this file belong in this collection?\n\
+                         Filename: {filename}\n\n\
+                         Answer yes or no only."
+                    ),
+                },
+            ];
+            ai::chat_text(&key, ai::CLASSIFIER_MODEL, &messages).await
+        }
+    }).collect();
+
+    let results = futures::future::join_all(classify_futures).await;
+    let total = results.len();
+    let relevant: Vec<_> = downloads.into_iter().zip(results).filter_map(|(d, res)| {
+        match res {
+            Ok(ans) if ans.trim().to_lowercase().starts_with('y') => Some(d),
+            Ok(_) => None,
+            Err(e) => {
+                eprintln!("      classify error for '{}': {e}", d.filename);
+                None
+            }
+        }
+    }).collect();
+
+    eprintln!("      {}/{} downloads match these conventions", relevant.len(), total);
+
+    if relevant.is_empty() {
+        eprintln!("No matching downloads — nothing to do.");
+        return Ok(());
+    }
+
     // ── AI call ───────────────────────────────────────────────────────────────
-    eprintln!("[4/5] Asking {} to create download.sh files...", model);
-    let downloads_json = serde_json::to_string_pretty(&downloads)?;
+    eprintln!("[5/6] Asking {} to create download.sh files...", model);
+    let downloads_json = serde_json::to_string_pretty(&relevant)?;
 
     let existing_block = if existing_structure.is_empty() {
         String::new()
@@ -418,7 +464,7 @@ async fn generate(output_dir: &PathBuf, run: bool, dry_run: bool, model: Option<
     eprintln!("      AI proposed {} script(s)", ai.scripts.len());
 
     // ── write scripts ─────────────────────────────────────────────────────────
-    eprintln!("[5/5] Writing scripts to {}...", output_dir.display());
+    eprintln!("[6/6] Writing scripts to {}...", output_dir.display());
     let created = downloader::write_scripts(ai.scripts, output_dir, dry_run)?;
 
     if dry_run {
