@@ -6,7 +6,7 @@ use std::process::Command;
 
 #[derive(Deserialize, Debug)]
 pub struct DownloadScript {
-    /// Relative path from the output directory, e.g. "The Rookie [imdbid-tt7587890]/S03"
+    /// Relative path from the output directory, e.g. "Artist Name" or "Show Title/S01"
     pub path: String,
     /// Shell commands: one `wget` line per file
     pub content: String,

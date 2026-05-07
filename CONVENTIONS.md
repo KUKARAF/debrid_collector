@@ -1,13 +1,16 @@
-- Seasons in its own folder like S01
-- file Title should includ ethe number S01E01.mkv
-- Title of the series always in the original language 
-	- imdbid optional like:  [imdbid-tt7587890] 
-  
-## Example 
-The Rookie [imdbid-tt7587890]/S03/S03E01 - Consequences WEBRip-1080p.mkv
+# debrid-collector — Media Conventions
 
-## download.sh
-each season folder (e.g. the chair company/S01) should have one file with 1 line with wget per file. e.g. 
-	wget S01E01.mkv
-	wget S01E02.mkv
-	etc
+Each media type has its own folder with a dedicated `CONVENTIONS.md`.
+Run `debrid-collector generate` from inside the media folder you want to populate.
+
+| Folder | scan_depth | Structure |
+|--------|-----------|-----------|
+| `Audiobooks/` | 3 | `Author/Series/Book/files` |
+| `TvShows/` | 2 | `Show [imdbid]/S01/S01E01.mkv` |
+| `Movies/` | 1 | `Title (Year) [imdbid]/Title.mkv` |
+| `Music/` | 1 | `Artist/Artist - Track.mp3` |
+| `Books/` | 2 | `Author/Book Title/file.epub` |
+| `Comics/` | 2 | `Author or Series/Volume/files` |
+| `Courses/` | 2 | `Course Title/Module/lessons` |
+| `Podcasts/` | 1 | `Show Name/Episode.mp3` |
+| `Blinkist/` | 1 | `Category/Author - Title.m4a` |

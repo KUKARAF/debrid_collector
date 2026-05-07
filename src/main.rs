@@ -39,14 +39,18 @@ enum Cmd {
         model: Option<String>,
     },
 
-    /// Run an existing download.sh inside a season directory
+    /// Run an existing download.sh inside a directory
     Run {
         /// Path to the directory containing download.sh
         dir: PathBuf,
     },
 
-    /// List available Groq models
-    Models,
+    /// List available OpenRouter models and optionally save selection to CONVENTIONS.md
+    Models {
+        /// Directory containing CONVENTIONS.md (default: current dir)
+        #[arg(short, long, default_value = ".")]
+        output_dir: PathBuf,
+    },
 
     /// Manage torrents added on Real-Debrid
     Torrent {
@@ -86,12 +90,12 @@ async fn run() -> Result<()> {
         Cmd::Generate { output_dir, run, dry_run, model } => {
             generate(&output_dir, run, dry_run, model.as_deref()).await?;
         }
-        Cmd::Models => {
+        Cmd::Models { output_dir } => {
             let api_key = kv::get_secret("OPENROUTER_API_KEY")
                 .context("could not obtain OPENROUTER_API_KEY")?;
             let models = ai::list_models(&api_key).await?;
             if let Some(selected) = select_model(&models)? {
-                save_model_to_conventions(selected)?;
+                save_model_to_conventions(selected, &output_dir)?;
                 println!("Saved '{selected}' to CONVENTIONS.md");
             }
         }
@@ -206,13 +210,13 @@ fn truncate(s: &str, max: usize) -> String {
 }
 
 /// Parse optional YAML frontmatter from a markdown string.
-/// Returns (frontmatter_model, body_without_frontmatter).
-fn parse_frontmatter(src: &str) -> (Option<String>, &str) {
+/// Returns (frontmatter_model, scan_depth, body_without_frontmatter).
+fn parse_frontmatter(src: &str) -> (Option<String>, Option<usize>, &str) {
     let Some(rest) = src.strip_prefix("---\n") else {
-        return (None, src);
+        return (None, None, src);
     };
     let Some(end) = rest.find("\n---\n") else {
-        return (None, src);
+        return (None, None, src);
     };
     let front = &rest[..end];
     let body = &rest[end + 5..]; // skip "\n---\n"
@@ -221,15 +225,28 @@ fn parse_frontmatter(src: &str) -> (Option<String>, &str) {
         let val = line.strip_prefix("model:")?;
         Some(val.trim().to_string())
     });
-    (model, body)
+    let scan_depth = front.lines().find_map(|line| {
+        let line = line.trim();
+        let val = line.strip_prefix("scan_depth:")?;
+        val.trim().parse::<usize>().ok()
+    });
+    (model, scan_depth, body)
 }
 
-fn save_model_to_conventions(model: &str) -> Result<()> {
-    let path = std::path::Path::new("CONVENTIONS.md");
-    let existing = std::fs::read_to_string(path).unwrap_or_default();
-    let (_, body) = parse_frontmatter(&existing);
+fn save_model_to_conventions(model: &str, output_dir: &std::path::Path) -> Result<()> {
+    // Mirror load_conventions resolution: prefer output_dir, fall back to CWD
+    let path = {
+        let candidate = output_dir.join("CONVENTIONS.md");
+        if candidate.exists() {
+            candidate
+        } else {
+            std::path::PathBuf::from("CONVENTIONS.md")
+        }
+    };
+    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    let (_, _, body) = parse_frontmatter(&existing);
     let new_content = format!("---\nmodel: {model}\n---\n{body}");
-    std::fs::write(path, new_content).context("failed to write CONVENTIONS.md")?;
+    std::fs::write(&path, new_content).context("failed to write CONVENTIONS.md")?;
     Ok(())
 }
 
@@ -296,30 +313,38 @@ fn load_conventions(output_dir: &std::path::Path) -> Result<String> {
     )
 }
 
-fn scan_output_dir(output_dir: &std::path::Path) -> Result<String> {
+fn scan_output_dir(output_dir: &std::path::Path, max_depth: usize) -> Result<String> {
     if !output_dir.exists() {
         return Ok(String::new());
     }
     let mut lines: Vec<String> = Vec::new();
-    let mut shows: Vec<_> = std::fs::read_dir(output_dir)
-        .with_context(|| format!("failed to read {}", output_dir.display()))?
+    scan_dir_recursive(output_dir, 0, max_depth, "", &mut lines)?;
+    Ok(lines.join("\n"))
+}
+
+fn scan_dir_recursive(
+    dir: &std::path::Path,
+    depth: usize,
+    max_depth: usize,
+    prefix: &str,
+    lines: &mut Vec<String>,
+) -> Result<()> {
+    let mut entries: Vec<_> = std::fs::read_dir(dir)
+        .with_context(|| format!("failed to read {}", dir.display()))?
         .filter_map(|e| e.ok())
         .filter(|e| e.path().is_dir())
         .collect();
-    shows.sort_by_key(|e| e.file_name());
-    for show in shows {
-        lines.push(format!("{}/", show.file_name().to_string_lossy()));
-        let mut seasons: Vec<_> = std::fs::read_dir(show.path())
-            .unwrap_or_else(|_| panic!())
-            .filter_map(|e| e.ok())
-            .filter(|e| e.path().is_dir())
-            .collect();
-        seasons.sort_by_key(|e| e.file_name());
-        for season in seasons {
-            lines.push(format!("  {}/", season.file_name().to_string_lossy()));
+    entries.sort_by_key(|e| e.file_name());
+    for entry in entries {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        let indent = "  ".repeat(depth);
+        lines.push(format!("{indent}{prefix}{name}/"));
+        if depth + 1 < max_depth {
+            scan_dir_recursive(&entry.path(), depth + 1, max_depth, "", lines)?;
         }
     }
-    Ok(lines.join("\n"))
+    Ok(())
 }
 
 async fn generate(output_dir: &PathBuf, run: bool, dry_run: bool, model: Option<&str>) -> Result<()> {
@@ -332,16 +357,18 @@ async fn generate(output_dir: &PathBuf, run: bool, dry_run: bool, model: Option<
 
     // ── conventions ──────────────────────────────────────────────────────────
     let conventions_raw = load_conventions(output_dir)?;
-    let (frontmatter_model, conventions) = parse_frontmatter(&conventions_raw);
+    let (frontmatter_model, frontmatter_depth, conventions) = parse_frontmatter(&conventions_raw);
 
     // Priority: -m flag > CONVENTIONS.md frontmatter > default
     let model = model
         .or(frontmatter_model.as_deref())
         .unwrap_or(ai::DEFAULT_MODEL);
 
+    let scan_depth = frontmatter_depth.unwrap_or(2);
+
     // ── scan existing structure ───────────────────────────────────────────────
     eprintln!("[2/5] Scanning existing structure in {}...", output_dir.display());
-    let existing_structure = scan_output_dir(output_dir)?;
+    let existing_structure = scan_output_dir(output_dir, scan_depth)?;
     if existing_structure.is_empty() {
         eprintln!("      (empty — first run)");
     } else {
@@ -439,7 +466,7 @@ async fn generate(output_dir: &PathBuf, run: bool, dry_run: bool, model: Option<
          - Group files that belong in the same folder into the same script\n\
          - If you cannot determine where a file belongs from the filename, use best judgement\n\
          - If a folder already exists in EXISTING STRUCTURE, use the EXACT folder name shown above\n\
-         - If a subfolder already exists in EXISTING STRUCTURE, skip all files for that subfolder (assume they are already downloaded)"
+         - If a path already appears in EXISTING STRUCTURE (at any level), skip all files whose natural destination falls within that path (assume they are already downloaded)"
     );
 
     let user_msg = format!(
