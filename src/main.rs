@@ -397,13 +397,13 @@ async fn generate(output_dir: &PathBuf, run: bool, dry_run: bool, model: Option<
             let messages = vec![
                 ai::Message {
                     role: "system".to_string(),
-                    content: "You are a media file classifier. Answer only 'yes' or 'no', nothing else.".to_string(),
+                    content: "You are a media file classifier. Your job is to identify what TYPE of media a collection holds (e.g. movies, TV shows, music), then decide if the given filename is that type. Ignore filename formatting — focus only on whether it is the right kind of media. Answer only 'yes' or 'no', nothing else.".to_string(),
                 },
                 ai::Message {
                     role: "user".to_string(),
                     content: format!(
-                        "Given these media collection conventions:\n{conv}\n\n\
-                         Does this file belong in this collection?\n\
+                        "These are the conventions for a media collection:\n{conv}\n\n\
+                         What type of media does this collection hold? Is the following filename that type of media?\n\
                          Filename: {filename}\n\n\
                          Answer yes or no only."
                     ),

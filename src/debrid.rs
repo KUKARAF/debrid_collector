@@ -36,6 +36,10 @@ pub async fn list_downloads(token: &str) -> Result<Vec<Download>> {
             anyhow::bail!("real-debrid API returned {status}: {body}");
         }
 
+        if resp.status() == reqwest::StatusCode::NO_CONTENT {
+            break;
+        }
+
         let page_items: Vec<Download> = resp.json().await.context("failed to parse downloads")?;
         let done = page_items.len() < LIMIT;
         all.extend(page_items);
@@ -90,6 +94,10 @@ pub async fn list_torrents(token: &str) -> Result<Vec<Torrent>> {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
             anyhow::bail!("real-debrid API returned {status}: {body}");
+        }
+
+        if resp.status() == reqwest::StatusCode::NO_CONTENT {
+            break;
         }
 
         let page_items: Vec<Torrent> = resp.json().await.context("failed to parse torrents")?;
